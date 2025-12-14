@@ -5,8 +5,9 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-import nomic
-# Move other imports here
+# NOTE: Removing top-level nomic imports to prevent startup crashes
+# import nomic
+# from nomic import embed
 from qdrant_client import QdrantClient
 
 # Configure logging
@@ -24,34 +25,9 @@ NOMIC_API_KEY = os.getenv("NOMIC_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
-# Initialize Nomic - MUST be done before importing embed
-import_error = None
+# Explicitly set env var for Nomic library to find
 if NOMIC_API_KEY:
-    try:
-        nomic.login(NOMIC_API_KEY)
-        logger.info("Nomic login successful")
-    except Exception as e:
-        logger.error(f"Nomic login failed: {e}")
-        import_error = f"Login failed: {e}"
-else:
-    logger.warning("NOMIC_API_KEY not found. Nomic operations may fail.")
-    import_error = "NOMIC_API_KEY missing"
-
-# Import embed after login
-try:
-    from nomic import embed
-except ImportError as e:
-    logger.error(f"Failed to import nomic.embed: {e}")
-    import_error = f"ImportError: {e}"
-    embed = None
-except ValueError as e:
-    logger.error(f"Failed to import embed (likely auth issue): {e}")
-    import_error = f"ValueError (Auth): {e}"
-    embed = None
-except Exception as e:
-    logger.error(f"Unexpected error importing embed: {e}")
-    import_error = f"Unexpected: {e}"
-    embed = None
+    os.environ["NOMIC_API_KEY"] = NOMIC_API_KEY
 
 # Initialize Qdrant
 qdrant_client = None
@@ -70,14 +46,14 @@ app = FastAPI(title="Nomic RAG Server", version="1.0.0")
 
 @app.get("/")
 async def root():
-    return {"message": "Nomic RAG Server is running", "endpoints": ["/health", "/search"]}
+    return {"message": "Nomic RAG Server is running", "endpoints": ["/health", "/search", "/embed", "/debug"]}
 
 class SearchRequest(BaseModel):
     query: str
     collection_name: str
     limit: int = 5
     score_threshold: float = 0.0
-    task_type: str = "search_query" # Nomic specific parameter
+    task_type: str = "search_query"
 
 class SearchResult(BaseModel):
     id: Any
@@ -99,18 +75,61 @@ class EmbedResponse(BaseModel):
 async def health_check():
     return {
         "status": "healthy",
-        "nomic_configured": bool(NOMIC_API_KEY),
+        "nomic_key_present": bool(NOMIC_API_KEY),
         "qdrant_configured": bool(qdrant_client)
+    }
+
+@app.get("/debug")
+async def debug_info():
+    """Endpoint to diagnose environment and import issues"""
+    import_status = "Not attempted"
+    login_status = "Skipped"
+    
+    try:
+        import nomic
+        from nomic import embed
+        import_status = "Success"
+        
+        try:
+            # check if we can actually login
+            if NOMIC_API_KEY:
+                nomic.login(NOMIC_API_KEY)
+                login_status = "Success"
+            else:
+                login_status = "No Key provided"
+        except Exception as e:
+            login_status = f"Failed: {str(e)}"
+            
+    except ImportError as e:
+        import_status = f"ImportError: {str(e)}"
+    except ValueError as e:
+        import_status = f"ValueError: {str(e)}"
+    except Exception as e:
+        import_status = f"Error: {str(e)}"
+
+    return {
+        "env_vars": {
+            "NOMIC_API_KEY": "Present" if NOMIC_API_KEY else "Missing",
+            "QDRANT_URL": QDRANT_URL
+        },
+        "python_env_nomic_key": "Present" if os.environ.get("NOMIC_API_KEY") else "Missing",
+        "import_status": import_status,
+        "login_status": login_status
     }
 
 @app.post("/embed", response_model=EmbedResponse)
 async def generate_embeddings(request: EmbedRequest):
     if not NOMIC_API_KEY:
         raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
-    if embed is None:
-        raise HTTPException(status_code=500, detail=f"Nomic library not initialized. Startup Error: {import_error}")
         
     try:
+        # Lazy import
+        import nomic
+        from nomic import embed
+        
+        # Ensure login
+        nomic.login(NOMIC_API_KEY)
+        
         logger.info(f"Generating embeddings for {len(request.texts)} texts")
         output = embed.text(
             texts=request.texts,
@@ -124,19 +143,25 @@ async def generate_embeddings(request: EmbedRequest):
         return {"embeddings": output['embeddings']}
     except Exception as e:
         logger.error(f"Embedding error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return full traceback in detail for debugging
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{str(e)} | {traceback.format_exc()}")
 
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
     if not NOMIC_API_KEY:
         raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
-    if embed is None:
-        raise HTTPException(status_code=500, detail=f"Nomic library not initialized. Startup Error: {import_error}")
     if not qdrant_client:
         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
 
     try:
+        # Lazy import
+        import nomic
+        from nomic import embed
+        
+        nomic.login(NOMIC_API_KEY)
+
         # 1. Generate Embedding
         logger.info(f"Generating embedding for query: '{request.query}'")
         output = embed.text(
@@ -148,7 +173,7 @@ async def search(request: SearchRequest):
         if not output or 'embeddings' not in output:
             raise HTTPException(status_code=500, detail="Failed to generate embeddings")
             
-        params = output.get('usage', {}) # Checking usage if needed
+        params = output.get('usage', {}) 
         query_vector = output['embeddings'][0]
         
         # 2. Search Qdrant
@@ -176,7 +201,8 @@ async def search(request: SearchRequest):
 
     except Exception as e:
         logger.error(f"Search error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{str(e)} | {traceback.format_exc()}")
 
 if __name__ == "__main__":
     import uvicorn
