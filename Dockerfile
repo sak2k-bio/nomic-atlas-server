@@ -23,4 +23,12 @@ COPY .env.example .env
 EXPOSE 10000
 
 # Run the server
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "10000"]
+# Create a startup script to handle credentials manually
+RUN echo '#!/bin/sh\n\
+mkdir -p /root/.nomic\n\
+echo "{\"token\": \"$NOMIC_API_KEY\", \"tenant\": \"production\"}" > /root/.nomic/credentials\n\
+echo "Credentials written to /root/.nomic/credentials"\n\
+exec uvicorn server:app --host 0.0.0.0 --port 10000\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]

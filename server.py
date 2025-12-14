@@ -5,9 +5,6 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-# NOTE: Removing top-level nomic imports to prevent startup crashes
-# import nomic
-# from nomic import embed
 from qdrant_client import QdrantClient
 
 # Configure logging
@@ -25,9 +22,17 @@ NOMIC_API_KEY = os.getenv("NOMIC_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
-# Explicitly set env var for Nomic library to find
-if NOMIC_API_KEY:
-    os.environ["NOMIC_API_KEY"] = NOMIC_API_KEY
+# Import Nomic - The credentials should be set by the Docker startup script
+try:
+    import nomic
+    from nomic import embed
+    logger.info("Successfully imported nomic.embed")
+except ImportError as e:
+    logger.error(f"Failed to import nomic: {e}")
+    embed = None
+except Exception as e:
+    logger.error(f"Unexpected error importing nomic: {e}")
+    embed = None
 
 # Initialize Qdrant
 qdrant_client = None
@@ -75,61 +80,42 @@ class EmbedResponse(BaseModel):
 async def health_check():
     return {
         "status": "healthy",
-        "nomic_key_present": bool(NOMIC_API_KEY),
+        "nomic_key_configured": bool(NOMIC_API_KEY),
+        "nomic_embed_loaded": embed is not None,
         "qdrant_configured": bool(qdrant_client)
     }
 
 @app.get("/debug")
 async def debug_info():
-    """Endpoint to diagnose environment and import issues"""
-    import_status = "Not attempted"
-    login_status = "Skipped"
-    
-    try:
-        import nomic
-        from nomic import embed
-        import_status = "Success"
-        
+    """Endpoint to diagnose environment and configuration"""
+    creds_path = "/root/.nomic/credentials"
+    creds_exist = os.path.exists(creds_path)
+    creds_content = "N/A"
+    if creds_exist:
         try:
-            # check if we can actually login
-            if NOMIC_API_KEY:
-                nomic.login(NOMIC_API_KEY)
-                login_status = "Success"
-            else:
-                login_status = "No Key provided"
-        except Exception as e:
-            login_status = f"Failed: {str(e)}"
-            
-    except ImportError as e:
-        import_status = f"ImportError: {str(e)}"
-    except ValueError as e:
-        import_status = f"ValueError: {str(e)}"
-    except Exception as e:
-        import_status = f"Error: {str(e)}"
+             with open(creds_path, 'r') as f:
+                 creds_content = f.read()
+        except:
+             creds_content = "Read Error"
 
     return {
         "env_vars": {
             "NOMIC_API_KEY": "Present" if NOMIC_API_KEY else "Missing",
-            "QDRANT_URL": QDRANT_URL
         },
-        "python_env_nomic_key": "Present" if os.environ.get("NOMIC_API_KEY") else "Missing",
-        "import_status": import_status,
-        "login_status": login_status
+        "credentials_file": {
+             "exists": creds_exist,
+             "path": creds_path,
+             "content_preview": creds_content[:20] + "..." if len(creds_content) > 5 else creds_content # Security: don't show full token
+        },
+        "import_status": "Success" if embed else "Failed"
     }
 
 @app.post("/embed", response_model=EmbedResponse)
 async def generate_embeddings(request: EmbedRequest):
-    if not NOMIC_API_KEY:
-        raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
+    if embed is None:
+        raise HTTPException(status_code=500, detail="Nomic library not initialized.")
         
     try:
-        # Lazy import - Login MUST happen before importing embed in some versions/contexts
-        import nomic
-        # Ensure login
-        nomic.login(NOMIC_API_KEY)
-        
-        from nomic import embed
-        
         logger.info(f"Generating embeddings for {len(request.texts)} texts")
         output = embed.text(
             texts=request.texts,
@@ -138,30 +124,25 @@ async def generate_embeddings(request: EmbedRequest):
         )
         
         if not output or 'embeddings' not in output:
-             raise HTTPException(status_code=500, detail="Failed to generate embeddings")
+             # Check if output contains an error message from Nomic API
+             error_msg = str(output) if output else "No output"
+             raise HTTPException(status_code=500, detail=f"Failed to generate embeddings: {error_msg}")
              
         return {"embeddings": output['embeddings']}
     except Exception as e:
         logger.error(f"Embedding error: {str(e)}")
-        # Return full traceback in detail for debugging
         import traceback
         raise HTTPException(status_code=500, detail=f"{str(e)} | {traceback.format_exc()}")
 
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
-    if not NOMIC_API_KEY:
-        raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
+    if embed is None:
+        raise HTTPException(status_code=500, detail="Nomic library not initialized.")
     if not qdrant_client:
         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
 
     try:
-        # Lazy import - Login first
-        import nomic
-        nomic.login(NOMIC_API_KEY)
-        
-        from nomic import embed
-
         # 1. Generate Embedding
         logger.info(f"Generating embedding for query: '{request.query}'")
         output = embed.text(
