@@ -147,8 +147,7 @@ async def search(request: SearchRequest):
         logger.info(f"Generating embedding for query: '{request.query}'")
         output = embed.text(
             texts=[request.query],
-            model='nomic-embed-text-v1.5',
-            task_type=request.task_type
+            model='nomic-embed-text-v1.5'
         )
         
         if not output or 'embeddings' not in output:
