@@ -61,6 +61,10 @@ if QDRANT_URL:
 
 app = FastAPI(title="Nomic RAG Server", version="1.0.0")
 
+@app.get("/")
+async def root():
+    return {"message": "Nomic RAG Server is running", "endpoints": ["/health", "/search"]}
+
 class SearchRequest(BaseModel):
     query: str
     collection_name: str
