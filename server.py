@@ -123,12 +123,12 @@ async def generate_embeddings(request: EmbedRequest):
         raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
         
     try:
-        # Lazy import
+        # Lazy import - Login MUST happen before importing embed in some versions/contexts
         import nomic
-        from nomic import embed
-        
         # Ensure login
         nomic.login(NOMIC_API_KEY)
+        
+        from nomic import embed
         
         logger.info(f"Generating embeddings for {len(request.texts)} texts")
         output = embed.text(
@@ -156,11 +156,11 @@ async def search(request: SearchRequest):
         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
 
     try:
-        # Lazy import
+        # Lazy import - Login first
         import nomic
-        from nomic import embed
-        
         nomic.login(NOMIC_API_KEY)
+        
+        from nomic import embed
 
         # 1. Generate Embedding
         logger.info(f"Generating embedding for query: '{request.query}'")
