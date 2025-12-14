@@ -81,6 +81,13 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     query_embedding_sample: List[float] = Field(..., description="First 5 dimensions of embedding for verification")
 
+class EmbedRequest(BaseModel):
+    texts: List[str]
+    task_type: str = "search_document"
+
+class EmbedResponse(BaseModel):
+    embeddings: List[List[float]]
+
 @app.get("/health")
 async def health_check():
     return {
@@ -88,6 +95,28 @@ async def health_check():
         "nomic_configured": bool(NOMIC_API_KEY),
         "qdrant_configured": bool(qdrant_client)
     }
+
+@app.post("/embed", response_model=EmbedResponse)
+async def generate_embeddings(request: EmbedRequest):
+    if not NOMIC_API_KEY:
+        raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
+        
+    try:
+        logger.info(f"Generating embeddings for {len(request.texts)} texts")
+        output = embed.text(
+            texts=request.texts,
+            model='nomic-embed-text-v1.5',
+            task_type=request.task_type
+        )
+        
+        if not output or 'embeddings' not in output:
+             raise HTTPException(status_code=500, detail="Failed to generate embeddings")
+             
+        return {"embeddings": output['embeddings']}
+    except Exception as e:
+        logger.error(f"Embedding error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/search", response_model=SearchResponse)
 async def search(request: SearchRequest):
