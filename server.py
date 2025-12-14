@@ -119,8 +119,7 @@ async def generate_embeddings(request: EmbedRequest):
         logger.info(f"Generating embeddings for {len(request.texts)} texts")
         output = embed.text(
             texts=request.texts,
-            model='nomic-embed-text-v1.5',
-            task_type=request.task_type
+            model='nomic-embed-text-v1.5'
         )
         
         if not output or 'embeddings' not in output:
