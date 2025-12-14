@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 import nomic
-from nomic import embed
+# Move other imports here
 from qdrant_client import QdrantClient
 
 # Configure logging
@@ -24,11 +24,27 @@ NOMIC_API_KEY = os.getenv("NOMIC_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
-# Initialize Nomic
+# Initialize Nomic - MUST be done before importing embed
 if NOMIC_API_KEY:
-    nomic.login(NOMIC_API_KEY)
+    try:
+        nomic.login(NOMIC_API_KEY)
+        logger.info("Nomic login successful")
+    except Exception as e:
+        logger.warning(f"Nomic login failed: {e}")
 else:
     logger.warning("NOMIC_API_KEY not found. Nomic operations may fail.")
+
+# Import embed after login
+try:
+    from nomic import embed
+except ImportError:
+    # Fallback or error handling if nomic isn't installed correctly
+    logger.error("Failed to import nomic.embed")
+    embed = None
+except ValueError as e:
+    # Handle the specific case where it still complains
+    logger.error(f"Failed to import embed (likely auth issue): {e}")
+    embed = None
 
 # Initialize Qdrant
 qdrant_client = None
