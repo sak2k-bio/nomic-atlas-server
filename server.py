@@ -25,25 +25,32 @@ QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 # Initialize Nomic - MUST be done before importing embed
+import_error = None
 if NOMIC_API_KEY:
     try:
         nomic.login(NOMIC_API_KEY)
         logger.info("Nomic login successful")
     except Exception as e:
-        logger.warning(f"Nomic login failed: {e}")
+        logger.error(f"Nomic login failed: {e}")
+        import_error = f"Login failed: {e}"
 else:
     logger.warning("NOMIC_API_KEY not found. Nomic operations may fail.")
+    import_error = "NOMIC_API_KEY missing"
 
 # Import embed after login
 try:
     from nomic import embed
-except ImportError:
-    # Fallback or error handling if nomic isn't installed correctly
-    logger.error("Failed to import nomic.embed")
+except ImportError as e:
+    logger.error(f"Failed to import nomic.embed: {e}")
+    import_error = f"ImportError: {e}"
     embed = None
 except ValueError as e:
-    # Handle the specific case where it still complains
     logger.error(f"Failed to import embed (likely auth issue): {e}")
+    import_error = f"ValueError (Auth): {e}"
+    embed = None
+except Exception as e:
+    logger.error(f"Unexpected error importing embed: {e}")
+    import_error = f"Unexpected: {e}"
     embed = None
 
 # Initialize Qdrant
@@ -100,6 +107,8 @@ async def health_check():
 async def generate_embeddings(request: EmbedRequest):
     if not NOMIC_API_KEY:
         raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
+    if embed is None:
+        raise HTTPException(status_code=500, detail=f"Nomic library not initialized. Startup Error: {import_error}")
         
     try:
         logger.info(f"Generating embeddings for {len(request.texts)} texts")
@@ -122,6 +131,8 @@ async def generate_embeddings(request: EmbedRequest):
 async def search(request: SearchRequest):
     if not NOMIC_API_KEY:
         raise HTTPException(status_code=500, detail="NOMIC_API_KEY not configured")
+    if embed is None:
+        raise HTTPException(status_code=500, detail=f"Nomic library not initialized. Startup Error: {import_error}")
     if not qdrant_client:
         raise HTTPException(status_code=500, detail="Qdrant client not initialized")
 
